@@ -1,0 +1,13 @@
+{application, typed_erlang,
+ [{description, ""},
+  {vsn, "1.0"},
+  {registered, []},
+  {modules, []},
+  {applications, [
+                 kernel
+                 ,stdlib
+                 ,cowboy
+                 ]},
+  {mod, {test1, []}},
+  {env, []}
+ ]}.
