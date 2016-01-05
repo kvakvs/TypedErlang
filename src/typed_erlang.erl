@@ -27,7 +27,8 @@ walk_ast([E | RestASTIn], ASTOut) ->
 handle_ast({'attribute', _Line0, 'spec', Spec} = Attr) ->
     {MFA, [Spec0]} = Spec,
     {'type', _Line1, _FunOrBoundedFun, Spec1} = Spec0,
-    % io:format("Spec: MFA=~p ~p~n", [MFA, Spec1]),
-    ets:insert(?SPEC_TAB, {MFA, Spec1}),
+    Type = terl_type:parse_type(Spec1),
+    io:format("Spec: MFA=~p ~p~n", [MFA, Type]),
+    ets:insert(?SPEC_TAB, {MFA, Type}),
     Attr;
 handle_ast(X) -> X.
