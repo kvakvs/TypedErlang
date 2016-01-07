@@ -1,4 +1,4 @@
 .PHONY: try
 try:
-	rm ebin/*.beam
+	rm ebin/*.beam || true
 	rebar compile

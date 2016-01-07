@@ -41,40 +41,63 @@ core_transform(CoreMod, _Opts) ->
     Cpp = transpile(CoreMod),
     Modname = cerl:module_name(CoreMod),
     Filename = atom_to_list(Modname#c_literal.val) ++ ".cpp",
-    terl_cppmod:write(Filename, Cpp),
+    terl_cpp:write(Filename, Cpp),
     CoreMod.
 
 transpile(CoreMod) ->
-    Cpp0 = terl_cppmod:mod_new(),
+    Cpp0 = terl_cpp:mod_new(),
     Funs = transpile_funs(cerl:module_defs(CoreMod), []),
-    terl_cppmod:mod_funs(Funs, Cpp0).
+    terl_cpp:mod_funs(Funs, Cpp0).
 
 transpile_funs([], Accum) -> lists:reverse(Accum);
 transpile_funs([Def | T], Accum) ->
     Accum1 = [transpile_fun(Def) | Accum],
     transpile_funs(T, Accum1).
 
+%% @doc Given core function AST produce C++ function block
 transpile_fun({Name, CoreFun}) ->
-    Args = [terl_cppmod:var_new("Term", V#c_var.name)
+    Args = [terl_cpp:var_new("Term", V#c_var.name)
             || V <- CoreFun#c_fun.vars],
     Code = transpile_code(CoreFun#c_fun.body),
-    terl_cppmod:fun_new("Term", Name#c_var.name, Args, Code).
+    terl_cpp:fun_new("Term", Name#c_var.name, Args, Code).
 
+%% @doc Given core AST code block produce equal code block in C++
 transpile_code(X) when is_list(X) ->
     [transpile_code(Elem) || Elem <- X];
 transpile_code(#c_case{arg=Args, clauses=Clauses}) ->
     [{case_args, Args}]
-    ++ [terl_cppmod:nested("if",
+    ++ [terl_cpp:nested_new("if",
             transpile_expr(Cla#c_clause.guard),
             transpile_code(Cla#c_clause.body)) || Cla <- Clauses];
 transpile_code(X) -> X.
 
+%% @doc Given something that looks like expression AST produce equal C++
+%% structure
 transpile_expr(X) when is_list(X) -> [transpile_expr(Y) || Y <- X];
 transpile_expr(#c_call{module=Mod, name= Fun, args=Args}) ->
     call_mfa(Mod, Fun, Args);
+transpile_expr(#c_literal{val=Value}) when is_atom(Value) ->
+    terl_cpp:literal_new(atom, Value);
 transpile_expr(X) -> {expr, X}.
 
+%% @doc Given M,F,Args from core AST produce C++ name which will hopefully
+%% make sense and exist in support library
 call_mfa(#c_literal{val=M}, #c_literal{val=F}, Args) ->
-    terl_cppmod:call(io_lib:format("~s::~s", [M, F]), Args);
+    terl_cpp:call_new(resolve_bif_or_mfa(M, F, length(Args)), Args);
 call_mfa(M, F, Args) ->
-    terl_cppmod:call("gluon::apply", [M, F, Args]).
+    terl_cpp:call_new("gluon::apply", [M, F, Args]).
+
+%% @doc Given M,F,Arity produce a valid C++ identifier which resolves to a
+%% function that we need
+resolve_bif_or_mfa(erlang, '==', _Arity) -> "erlang::op_equal_soft";
+resolve_bif_or_mfa(erlang, '=:=', _Arity) -> "erlang::op_equal_hard";
+resolve_bif_or_mfa(erlang, '>', _Arity) -> "erlang::op_greater";
+resolve_bif_or_mfa(erlang, '<', _Arity) -> "erlang::op_less";
+resolve_bif_or_mfa(erlang, '=<', _Arity) -> "erlang::op_less_equal";
+resolve_bif_or_mfa(erlang, '>=', _Arity) -> "erlang::op_greater_equal";
+resolve_bif_or_mfa(erlang, '++', _Arity) -> "erlang::op_concat";
+resolve_bif_or_mfa(erlang, '+', _Arity) -> "erlang::op_add";
+resolve_bif_or_mfa(erlang, '-', _Arity) -> "erlang::op_subtract";
+resolve_bif_or_mfa(erlang, '*', _Arity) -> "erlang::op_multiply";
+resolve_bif_or_mfa(erlang, '/', _Arity) -> "erlang::op_float_div";
+resolve_bif_or_mfa(M, F, _Arity)        -> io_lib:format("~s::~s", [M, F]).
