@@ -7,12 +7,12 @@
 
 %% API
 -export([write/2, mod_new/0, mod_funs/2,
-    fun_new/4, var_new/2, nested_new/3, call_new/2, literal_new/2
-    ]).
+    fun_new/4, var_new/2, nested_new/3, call_new/2, literal_new/2,
+    var_new/1]).
 
 -record(module, {includes=[], funs = [] }).
 -record(func, {ret_type, name, args=[], code = []}).
--record(var, {name, type }).
+-record(var, {name, type}).
 -record(nested, {type, arg, code=[]}).
 -record(call, {name, args=[]}).
 %% a literal with orig erlang value; string representation for C++ is selected
@@ -67,12 +67,12 @@ format_code(X) -> format_code(X, 0).
 format_code(X, IndentLvl) when is_list(X) ->
     [[indent(IndentLvl), format_code(Y)]
         || Y <- X];
-%%format_code(#nested{type="if", arg=#lit{value=true}}=N, IndentLvl) ->
-    %% TODO: wrap 'if' argument with a true check function which resolves
-    %% to static true if atom::TRUE is passed
+%format_code(#nested{type="if_erl", arg=Arg}=N, IndentLvl) ->
+%    %% Wrap if argument with a boolean check
+%    format_code(N#nested{type="if", arg=wrap_boolean_check(Arg)}, IndentLvl);
 format_code(#nested{type=Type, arg=Arg, code=NestedCode}, IndentLvl) ->
     OffStr = indent(IndentLvl),
-    [OffStr, io_lib:format("~s(", [Type]),
+    [OffStr, io_lib:format("~s (", [Type]),
         format_args(Arg),
         ") {\n",
         format_code(NestedCode, IndentLvl + 1),
@@ -98,6 +98,8 @@ format_arg(#call{}=C) -> format_expr(C);
 format_arg(#lit{type=atom, value=V}) ->
     V1 = string:to_upper(atom_to_list(V)),
     io_lib:format("atom::~s", [V1]);
+format_arg(#var{type=use, name=N}) ->
+    io_lib:format("~s", [N]);
 format_arg(#var{}=A) ->
     io_lib:format("~s ~s", [A#var.type, A#var.name]);
 format_arg(X) -> io_lib:format("/* arg= ~p */", [X]).
@@ -108,10 +110,10 @@ format_fun_name({N, _Arity}) ->
 fun_new(RetType, Name, Args, Code) ->
     #func{ret_type=RetType, name=Name, args=Args, code=Code}.
 
-var_new(Type, Name) ->
-    #var{name=Name, type=Type}.
+var_new(Name) -> #var{name=Name, type=use}.
+var_new(Type, Name) -> #var{name=Name, type=Type}.
 
 format_expr(#call{name=N, args=Args}) ->
     [io_lib:format("~s(", [N]),
-        format_args(Args),
-        ");\n"].
+        iolist_join(format_args(Args), ", "),
+        ")"].

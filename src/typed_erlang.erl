@@ -64,12 +64,34 @@ transpile_fun({Name, CoreFun}) ->
 %% @doc Given core AST code block produce equal code block in C++
 transpile_code(X) when is_list(X) ->
     [transpile_code(Elem) || Elem <- X];
-transpile_code(#c_case{arg=Args, clauses=Clauses}) ->
-    [{case_args, Args}]
-    ++ [terl_cpp:nested_new("if",
-            transpile_expr(Cla#c_clause.guard),
-            transpile_code(Cla#c_clause.body)) || Cla <- Clauses];
+transpile_code(Case=#c_case{}) ->
+    do_case(Case);
 transpile_code(X) -> X.
+
+%% @doc Transpile case clauses with pattern matching arguments
+do_case(#c_case{arg=Args, clauses=Clauses}=Case) ->
+    [{case_args, Args}]
+    ++ [do_case_clause(Case, Cla) || Cla <- Clauses].
+
+do_case_clause(#c_case{}, Cla=#c_clause{guard=#c_literal{val=true}}) ->
+    transpile_code(Cla#c_clause.body);
+do_case_clause(#c_case{}, Cla=#c_clause{}) ->
+    %% TODO: Write proper translation of pattern match for case clause
+    %% const auto& X = cor1;
+    %% const auto cor4 = erlang::hd(cor0);
+    %% const auto cor5 = erlang::tl(cor0);
+    %% if (cor5.is_value() && cor4.is_value()) {
+    %%    if (helpers::true_check(erlang::op_equal_hard(cor4, X))) {
+
+    Guard = terl_cpp:nested_new("if",
+        terl_cpp:call_new("helpers::true_check",
+            [transpile_expr(Cla#c_clause.guard)]),
+        transpile_code(Cla#c_clause.body)),
+    %% Nest guard into pattern match block
+    terl_cpp:nested_new("if",
+        terl_cpp:call_new("helpers::match_pairs",
+                        transpile_expr(Cla#c_clause.pats)),
+        Guard).
 
 %% @doc Given something that looks like expression AST produce equal C++
 %% structure
@@ -78,14 +100,17 @@ transpile_expr(#c_call{module=Mod, name= Fun, args=Args}) ->
     call_mfa(Mod, Fun, Args);
 transpile_expr(#c_literal{val=Value}) when is_atom(Value) ->
     terl_cpp:literal_new(atom, Value);
+transpile_expr(#c_var{name=N}) ->
+    terl_cpp:var_new(N);
 transpile_expr(X) -> {expr, X}.
 
 %% @doc Given M,F,Args from core AST produce C++ name which will hopefully
 %% make sense and exist in support library
 call_mfa(#c_literal{val=M}, #c_literal{val=F}, Args) ->
-    terl_cpp:call_new(resolve_bif_or_mfa(M, F, length(Args)), Args);
+    terl_cpp:call_new(resolve_bif_or_mfa(M, F, length(Args)),
+        transpile_expr(Args));
 call_mfa(M, F, Args) ->
-    terl_cpp:call_new("gluon::apply", [M, F, Args]).
+    terl_cpp:call_new("gluon::apply", [M, F, transpile_expr(Args)]).
 
 %% @doc Given M,F,Arity produce a valid C++ identifier which resolves to a
 %% function that we need
