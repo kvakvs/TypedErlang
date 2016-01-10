@@ -55,43 +55,77 @@ transpile_funs([Def | T], Accum) ->
     transpile_funs(T, Accum1).
 
 %% @doc Given core function AST produce C++ function block
+%% Variable scope for fun is assumed to be empty, and grows deeper as we nest
+%% more and more code blocks.
 transpile_fun({Name, CoreFun}) ->
     Args = [terl_cpp:var_new("Term", V#c_var.name)
             || V <- CoreFun#c_fun.vars],
-    Code = transpile_code(CoreFun#c_fun.body),
+    Scope = sets:new(),
+    Code = transpile_code(CoreFun#c_fun.body, Scope),
     terl_cpp:fun_new("Term", Name#c_var.name, Args, Code).
 
 %% @doc Given core AST code block produce equal code block in C++
-transpile_code(X) when is_list(X) ->
-    [transpile_code(Elem) || Elem <- X];
-transpile_code(Case=#c_case{}) ->
-    do_case(Case);
-transpile_code(X) -> X.
+%% Takes core erlang subtree and returns transpiled C++ object from terl_cpp
+-spec transpile_code(X :: tuple(), Scope :: sets:set(atom())) -> any().
+transpile_code(X, Scope) when is_list(X) ->
+    [transpile_code(Elem, Scope) || Elem <- X];
+transpile_code(Case=#c_case{}, Scope) -> do_case(Case, Scope);
+transpile_code(X, _Scope) -> X.
 
 %% @doc Transpile case clauses with pattern matching arguments
-do_case(#c_case{arg=Args, clauses=Clauses}=Case) ->
-    [{case_args, Args}]
-    ++ [do_case_clause(Case, Cla) || Cla <- Clauses].
+do_case(#c_case{arg=Args, clauses=Clauses}=Case, Scope) ->
+    [{'CASE_ARGS', Args}]
+    ++ [do_case_clause(Case, Cla, Scope) || Cla <- Clauses].
 
-do_case_clause(#c_case{}, Cla=#c_clause{guard=#c_literal{val=true}}) ->
-    transpile_code(Cla#c_clause.body);
-do_case_clause(#c_case{}, Cla=#c_clause{}) ->
+%%do_case_clause(#c_case{}, Cla=#c_clause{guard=#c_literal{val=true}}, Scope) ->
+%%    %% True in a guard removes the guard but keeps the pattern match
+%%    %% TODO: pattern match
+%%    transpile_code(Cla#c_clause.body, Scope);
+do_case_clause(Case=#c_case{}, Clause=#c_clause{}, Scope) ->
     %% TODO: Write proper translation of pattern match for case clause
     %% const auto& X = cor1;
     %% const auto cor4 = erlang::hd(cor0);
     %% const auto cor5 = erlang::tl(cor0);
     %% if (cor5.is_value() && cor4.is_value()) {
     %%    if (helpers::true_check(erlang::op_equal_hard(cor4, X))) {
+    io:format("casearg=~p~nclause_pats=~p~nguard=~p~n------~n",
+        [case_args(Case), Clause#c_clause.pats, Clause#c_clause.guard]),
+%%    PM = terl_pm:compile(Clause#c_clause.pats, case_args(Case), Scope),
+    PatsAndArgs = lists:zip(Clause#c_clause.pats, case_args(Case)),
+    %% If variable was not in scope - create new and assign. Else compare.
+    VarsCode = [terl_cpp:var_new("const auto" ++ cpp_ref_if_var(Init),
+                                Var#c_var.name,
+                                transpile_expr(Init))
+        || {Var, Init} <- PatsAndArgs, is_new_variable(Var, Scope)],
+    Pats0 = [[transpile_expr(Left), transpile_expr(Right)]
+                || {Right, Left} <- PatsAndArgs, % swap right & left places
+                    not is_new_variable(Left, Scope)],
+    Pats = lists:flatten(Pats0),
 
-    Guard = terl_cpp:nested_new("if",
-        terl_cpp:call_new("helpers::true_check",
-            [transpile_expr(Cla#c_clause.guard)]),
-        transpile_code(Cla#c_clause.body)),
+    %% TODO: Wrap whole pattern match here with nested do{}while 0
+    %% TODO: Here scope will change after new variables are created
+    Guard = make_true_check(Clause#c_clause.guard, Clause#c_clause.body, Scope),
     %% Nest guard into pattern match block
+    MatchCode = case Pats of
+        [] -> Guard;
+        _ ->
+            terl_cpp:nested_new("if",
+                            terl_cpp:call_new("helpers::match_pairs", Pats),
+                            Guard)
+    end,
+    terl_cpp:nested_simple([VarsCode, MatchCode]).
+
+%% TODO: This can be expression too!
+case_args(#c_case{arg=#c_values{}} = Case) ->
+    Values = Case#c_case.arg,
+    Values#c_values.es;
+case_args(#c_case{arg=Arg}) when not is_list(Arg) -> [Arg].
+
+%% @doc Builds a C++ operator 'if' which checks guard value with nested code
+make_true_check(Cond, NestedCode, Scope) ->
     terl_cpp:nested_new("if",
-        terl_cpp:call_new("helpers::match_pairs",
-                        transpile_expr(Cla#c_clause.pats)),
-        Guard).
+        terl_cpp:call_new("helpers::true_check", [transpile_expr(Cond)]),
+        transpile_code(NestedCode, Scope)).
 
 %% @doc Given something that looks like expression AST produce equal C++
 %% structure
@@ -102,7 +136,7 @@ transpile_expr(#c_literal{val=Value}) when is_atom(Value) ->
     terl_cpp:literal_new(atom, Value);
 transpile_expr(#c_var{name=N}) ->
     terl_cpp:var_new(N);
-transpile_expr(X) -> {expr, X}.
+transpile_expr(X) -> {'EXPR', X}.
 
 %% @doc Given M,F,Args from core AST produce C++ name which will hopefully
 %% make sense and exist in support library
@@ -114,15 +148,21 @@ call_mfa(M, F, Args) ->
 
 %% @doc Given M,F,Arity produce a valid C++ identifier which resolves to a
 %% function that we need
-resolve_bif_or_mfa(erlang, '==', _Arity) -> "erlang::op_equal_soft";
-resolve_bif_or_mfa(erlang, '=:=', _Arity) -> "erlang::op_equal_hard";
-resolve_bif_or_mfa(erlang, '>', _Arity) -> "erlang::op_greater";
-resolve_bif_or_mfa(erlang, '<', _Arity) -> "erlang::op_less";
-resolve_bif_or_mfa(erlang, '=<', _Arity) -> "erlang::op_less_equal";
-resolve_bif_or_mfa(erlang, '>=', _Arity) -> "erlang::op_greater_equal";
+resolve_bif_or_mfa(erlang, '==', _Arity) -> "erlang::op_eq_soft";
+resolve_bif_or_mfa(erlang, '=:=', _Arity) -> "erlang::op_eq_hard";
+resolve_bif_or_mfa(erlang, '>', _Arity) -> "erlang::op_gt";
+resolve_bif_or_mfa(erlang, '<', _Arity) -> "erlang::op_lt";
+resolve_bif_or_mfa(erlang, '=<', _Arity) -> "erlang::op_leq";
+resolve_bif_or_mfa(erlang, '>=', _Arity) -> "erlang::op_geq";
 resolve_bif_or_mfa(erlang, '++', _Arity) -> "erlang::op_concat";
 resolve_bif_or_mfa(erlang, '+', _Arity) -> "erlang::op_add";
-resolve_bif_or_mfa(erlang, '-', _Arity) -> "erlang::op_subtract";
-resolve_bif_or_mfa(erlang, '*', _Arity) -> "erlang::op_multiply";
+resolve_bif_or_mfa(erlang, '-', _Arity) -> "erlang::op_sub";
+resolve_bif_or_mfa(erlang, '*', _Arity) -> "erlang::op_mult";
 resolve_bif_or_mfa(erlang, '/', _Arity) -> "erlang::op_float_div";
 resolve_bif_or_mfa(M, F, _Arity)        -> io_lib:format("~s::~s", [M, F]).
+
+
+%% @doc Return true if Var is a Core variable and its name is NOT in Scope
+is_new_variable(#c_var{name=N}, Scope) ->
+    not sets:is_element(N, Scope);
+is_new_variable(_, _Scope) -> false.

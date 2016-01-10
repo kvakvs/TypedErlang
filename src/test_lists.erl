@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %%
 -module(test_lists).
--compile([{core_transform, typed_erlang}]).
+%-compile([{core_transform, typed_erlang}]).
 
 -compile({no_auto_import,[max/2]}).
 -compile({no_auto_import,[min/2]}).
