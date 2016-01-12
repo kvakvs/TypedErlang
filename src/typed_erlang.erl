@@ -90,30 +90,34 @@ do_case_clause(Case=#c_case{}, Clause=#c_clause{}, Scope) ->
     %%    if (helpers::true_check(erlang::op_equal_hard(cor4, X))) {
     io:format("casearg=~p~nclause_pats=~p~nguard=~p~n------~n",
         [case_args(Case), Clause#c_clause.pats, Clause#c_clause.guard]),
-%%    PM = terl_pm:compile(Clause#c_clause.pats, case_args(Case), Scope),
-    PatsAndArgs = lists:zip(Clause#c_clause.pats, case_args(Case)),
-    %% If variable was not in scope - create new and assign. Else compare.
-    VarsCode = [terl_cpp:var_new("const auto" ++ cpp_ref_if_var(Init),
-                                Var#c_var.name,
-                                transpile_expr(Init))
-        || {Var, Init} <- PatsAndArgs, is_new_variable(Var, Scope)],
-    Pats0 = [[transpile_expr(Left), transpile_expr(Right)]
-                || {Right, Left} <- PatsAndArgs, % swap right & left places
-                    not is_new_variable(Left, Scope)],
-    Pats = lists:flatten(Pats0),
+
+%%    PatsAndArgs = lists:zip(Clause#c_clause.pats, case_args(Case)),
+%%    %% If variable was not in scope - create new and assign. Else compare.
+%%    VarsCode = [terl_cpp:var_new("const auto" ++ cpp_ref_if_var(Init),
+%%                                Var#c_var.name,
+%%                                transpile_expr(Init))
+%%        || {Var, Init} <- PatsAndArgs, is_new_variable(Var, Scope)],
+%%    Pats0 = [[transpile_expr(Left), transpile_expr(Right)]
+%%                || {Right, Left} <- PatsAndArgs, % swap right & left places
+%%                    not is_new_variable(Left, Scope)],
+%%    Pats = lists:flatten(Pats0),
 
     %% TODO: Wrap whole pattern match here with nested do{}while 0
     %% TODO: Here scope will change after new variables are created
     Guard = make_true_check(Clause#c_clause.guard, Clause#c_clause.body, Scope),
-    %% Nest guard into pattern match block
-    MatchCode = case Pats of
-        [] -> Guard;
-        _ ->
-            terl_cpp:nested_new("if",
-                            terl_cpp:call_new("helpers::match_pairs", Pats),
-                            Guard)
-    end,
-    terl_cpp:nested_simple([VarsCode, MatchCode]).
+%%    %% Nest guard into pattern match block
+%%    MatchCode = case Pats of
+%%        [] -> Guard;
+%%        _ ->
+%%            terl_cpp:nested_new("if",
+%%                            terl_cpp:call_new("helpers::match_pairs", Pats),
+%%                            Guard)
+%%    end,
+%%    terl_cpp:nested_simple([VarsCode, MatchCode]).
+
+    %% Wrap guard code inside pattern matching code. Guard building function
+    %% will recurse deeper in code
+    terl_pm:compile(Clause#c_clause.pats, case_args(Case), Scope, Guard).
 
 %% TODO: This can be expression too!
 case_args(#c_case{arg=#c_values{}} = Case) ->
