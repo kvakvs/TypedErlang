@@ -18,11 +18,23 @@ compile(Lefts, Rights, Scope, NestedCode) ->
     compile_(Lefts, Rights, Scope, NestedCode, []).
 
 compile_([], [], _Scope, _Nested, A) -> lists:reverse(A);
-compile_([L=#c_var{} | Lefts], [R | Rights], Scope, _NestedCode, A) ->
-    A1 = case sets:is_element(L#c_var.name, Scope) of
-             true -> comparison(L, R); % left is a new free variable
-             false -> [terl_cpp:var_new("const auto&", L#c_var.name) | A]
-         end,
+compile_([L | Lefts], [R | Rights], Scope, _NestedCode, A) ->
+    A1 = match(L, R, Scope, A),
     compile(Lefts, Rights, Scope, A1).
 %% when matching left cons or tuple, check each variable if it is free, if not
 %% - compile to a comparison else to a new variable.
+
+%% @doc Guess the action required for the pair L,R in Scope, and append to Acc
+match(#c_var{name=LName} = L, R, Scope, Acc) ->
+    case sets:is_element(LName, Scope) of
+        true ->
+            Acc ++ [comparison(L, R)]; % left is a new free variable
+        false ->
+            Acc ++ [terl_cpp:var_new("const auto&", L#c_var.name)]
+            %% TODO: Scope is changed here, update scope
+    end.
+
+%% @doc Decide either additional condition for if or a separate if block to
+%% compare values L and R
+comparison(L, R) ->
+    erlang:error(not_implemented).

@@ -77,10 +77,6 @@ do_case(#c_case{arg=Args, clauses=Clauses}=Case, Scope) ->
     [{'CASE_ARGS', Args}]
     ++ [do_case_clause(Case, Cla, Scope) || Cla <- Clauses].
 
-%%do_case_clause(#c_case{}, Cla=#c_clause{guard=#c_literal{val=true}}, Scope) ->
-%%    %% True in a guard removes the guard but keeps the pattern match
-%%    %% TODO: pattern match
-%%    transpile_code(Cla#c_clause.body, Scope);
 do_case_clause(Case=#c_case{}, Clause=#c_clause{}, Scope) ->
     %% TODO: Write proper translation of pattern match for case clause
     %% const auto& X = cor1;
@@ -91,29 +87,7 @@ do_case_clause(Case=#c_case{}, Clause=#c_clause{}, Scope) ->
     io:format("casearg=~p~nclause_pats=~p~nguard=~p~n------~n",
         [case_args(Case), Clause#c_clause.pats, Clause#c_clause.guard]),
 
-%%    PatsAndArgs = lists:zip(Clause#c_clause.pats, case_args(Case)),
-%%    %% If variable was not in scope - create new and assign. Else compare.
-%%    VarsCode = [terl_cpp:var_new("const auto" ++ cpp_ref_if_var(Init),
-%%                                Var#c_var.name,
-%%                                transpile_expr(Init))
-%%        || {Var, Init} <- PatsAndArgs, is_new_variable(Var, Scope)],
-%%    Pats0 = [[transpile_expr(Left), transpile_expr(Right)]
-%%                || {Right, Left} <- PatsAndArgs, % swap right & left places
-%%                    not is_new_variable(Left, Scope)],
-%%    Pats = lists:flatten(Pats0),
-
-    %% TODO: Wrap whole pattern match here with nested do{}while 0
-    %% TODO: Here scope will change after new variables are created
     Guard = make_true_check(Clause#c_clause.guard, Clause#c_clause.body, Scope),
-%%    %% Nest guard into pattern match block
-%%    MatchCode = case Pats of
-%%        [] -> Guard;
-%%        _ ->
-%%            terl_cpp:nested_new("if",
-%%                            terl_cpp:call_new("helpers::match_pairs", Pats),
-%%                            Guard)
-%%    end,
-%%    terl_cpp:nested_simple([VarsCode, MatchCode]).
 
     %% Wrap guard code inside pattern matching code. Guard building function
     %% will recurse deeper in code
